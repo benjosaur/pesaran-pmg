@@ -514,7 +514,7 @@ pmg_final <- function(Y, X, Z, Ti, k, plag, qlag, NN, theta) {
 
   # Invert information matrix
   GGinv   <- solve(GG)
-  PMLECOV <- GGinv[1:k, 1:k]
+  PMLECOV <- GGinv[1:k, 1:k, drop = FALSE]
 
   # θ SE from information matrix
   theta_se <- sqrt(diag(PMLECOV))

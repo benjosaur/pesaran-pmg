@@ -297,8 +297,15 @@ print.dfe_result <- function(x, ...) {
   cat("Long-Run Coefficients:\n")
   print(round(x$lr, 4))
   k <- nrow(x$lr)
-  cat(sprintf("\nError Correction (phi): %.4f (se=%.4f)\n",
-              x$dferes[k + 1, 1], x$dferes[k + 1, 2]))
+  # When plag=0 (static), phi=-1 is imposed and not in dferes.
+  # When plag>0, phi is row k+1 of dferes (after k LR theta rows).
+  pp <- x$panel$plag[1]
+  if (pp == 0L) {
+    cat("\nError Correction (phi): -1.000 (imposed, static model)\n")
+  } else {
+    cat(sprintf("\nError Correction (phi): %.4f (se=%.4f)\n",
+                x$dferes[k + 1, 1], x$dferes[k + 1, 2]))
+  }
 }
 
 
