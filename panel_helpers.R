@@ -286,6 +286,52 @@ dfe_panel <- function(data, y, x, unit, time,
   res$lr    <- lr_df
   res$panel <- p
 
+  # Build SR row labels for dferes
+  # dferes layout: [k LR theta, phi (if plag>0), k beta on x, SR dynamics]
+  pp <- p$plag[1]
+  nr <- nrow(res$dferes)
+  sr_labels <- character(nr)
+  sr_labels[1:p$k] <- p$x_names  # LR theta rows
+
+  if (pp > 0L) {
+    pos <- p$k + 1L
+    sr_labels[pos] <- "phi"
+    pos <- pos + 1L
+  } else {
+    pos <- p$k + 1L
+  }
+
+  # Beta on x (SR levels coefficients)
+  for (j in seq_len(p$k)) {
+    if (pos <= nr) { sr_labels[pos] <- paste0("b.", p$x_names[j]); pos <- pos + 1L }
+  }
+
+  # Lagged Δy terms (pp - 1 of them)
+  if (pp >= 2L) {
+    for (j in seq_len(pp - 1L)) {
+      if (pos <= nr) { sr_labels[pos] <- sprintf("d.%s(-%d)", p$y_name, j); pos <- pos + 1L }
+    }
+  }
+
+  # Current and lagged Δx terms
+  for (j in seq_len(p$k)) {
+    q_j <- p$qlag[1, j]
+    if (q_j >= 1L) {
+      if (pos <= nr) { sr_labels[pos] <- paste0("d.", p$x_names[j]); pos <- pos + 1L }
+      if (q_j >= 2L) {
+        for (l in seq_len(q_j - 1L)) {
+          if (pos <= nr) { sr_labels[pos] <- sprintf("d.%s(-%d)", p$x_names[j], l); pos <- pos + 1L }
+        }
+      }
+    }
+  }
+
+  # Any remaining (shouldn't happen, but safety)
+  while (pos <= nr) { sr_labels[pos] <- sprintf("sr.%d", pos); pos <- pos + 1L }
+
+  rownames(res$dferes)  <- sr_labels
+  rownames(res$rdferes) <- sr_labels
+
   class(res) <- "dfe_result"
   res
 }
@@ -294,17 +340,29 @@ dfe_panel <- function(data, y, x, unit, time,
 print.dfe_result <- function(x, ...) {
   cat("Dynamic Fixed Effects Estimator\n")
   cat(sprintf("Observations: %d\n\n", x$qobs))
+
+  k  <- nrow(x$lr)
+  pp <- x$panel$plag[1]
+  nr <- nrow(x$dferes)
+
   cat("Long-Run Coefficients:\n")
   print(round(x$lr, 4))
-  k <- nrow(x$lr)
-  # When plag=0 (static), phi=-1 is imposed and not in dferes.
-  # When plag>0, phi is row k+1 of dferes (after k LR theta rows).
-  pp <- x$panel$plag[1]
+
   if (pp == 0L) {
-    cat("\nError Correction (phi): -1.000 (imposed, static model)\n")
+    cat("\nError Correction (phi): -1.0000 (imposed, static model)\n")
+    # SR params start at row k+1 (beta, then other)
+    sr_start <- k + 1L
   } else {
     cat(sprintf("\nError Correction (phi): %.4f (se=%.4f)\n",
                 x$dferes[k + 1, 1], x$dferes[k + 1, 2]))
+    # SR params: row k+1 is phi, rows k+2 onward are beta + other
+    sr_start <- k + 2L
+  }
+
+  if (sr_start <= nr) {
+    cat("\nShort-Run Coefficients:\n")
+    sr <- x$dferes[sr_start:nr, , drop = FALSE]
+    print(round(sr, 4))
   }
 }
 
