@@ -53,7 +53,8 @@ source("pmg_mg.R")
 #'
 prepare_panel <- function(data, y, x, unit = NULL, time = NULL,
                           z = NULL, plag = 1L, qlag = 1L,
-                          ref_group = NULL) {
+                          ref_group = NULL,
+                          lag = NULL, max_lag = 2L) {
 
   # --- Extract panel indices ---
   # Handle pdata.frame (plm package)
@@ -159,6 +160,33 @@ prepare_panel <- function(data, y, x, unit = NULL, time = NULL,
 
   NN <- if (rel_var) n - 1L else n
 
+  # --- Automatic lag selection ---
+  lag_info <- NULL
+  if (!is.null(lag) && is.character(lag)) {
+    lag <- tolower(lag)
+    stopifnot(lag %in% c("aic", "sbc"))
+
+    sel <- select_common_lags(
+      Y_out, X_out, Z_out, n, Ti, k,
+      max_lag   = as.integer(max_lag),
+      criterion = lag,
+      NN        = NN,
+      rel_var   = rel_var,
+      verbose   = FALSE
+    )
+
+    # Override plag/qlag with selected values
+    plag_vec <- rep(sel$plag, n)
+    qlag_mat <- matrix(rep(sel$qlag, each = n), nrow = n, ncol = k)
+    if (rel_var) qlag_mat[, k] <- 0L   # enforce invariant
+
+    lag_info <- sel
+
+    message(sprintf("ARDL(%d,%s) selected by %s (max_lag=%d, %d candidates evaluated)",
+                    sel$plag, paste(sel$qlag, collapse = ","),
+                    toupper(sel$criterion), sel$max_lag, sel$n_candidates))
+  }
+
   list(
     Y = Y_out, X = X_out, Z = Z_out,
     Ti = Ti, n = n, k = k,
@@ -166,7 +194,8 @@ prepare_panel <- function(data, y, x, unit = NULL, time = NULL,
     NN = NN, rel_var = rel_var,
     group_names = group_names,
     x_names = x_names,
-    y_name = y
+    y_name = y,
+    lag_info = lag_info
   )
 }
 
@@ -250,9 +279,11 @@ build_sr_table <- function(beta, beta_se, beta_t, other, other_se, other_t, p) {
 pmg_panel <- function(data, y, x, unit, time,
                       z = NULL, plag = 1L, qlag = 1L,
                       ref_group = NULL, ini_theta = NULL,
-                      maxiter = 1000L, tol = 1e-4, verbose = FALSE) {
+                      maxiter = 1000L, tol = 1e-4, verbose = FALSE,
+                      lag = NULL, max_lag = 2L) {
 
-  p   <- prepare_panel(data, y, x, unit, time, z, plag, qlag, ref_group)
+  p   <- prepare_panel(data, y, x, unit, time, z, plag, qlag, ref_group,
+                        lag = lag, max_lag = max_lag)
   res <- PMG_NR(p$Y, p$X, p$Z, p$n, p$Ti, p$k, p$plag, p$qlag,
                 NN = p$NN, ini_theta = ini_theta,
                 maxiter = maxiter, tol = tol, verbose = verbose)
@@ -272,6 +303,12 @@ pmg_panel <- function(data, y, x, unit, time,
 #' @export
 print.pmg_result <- function(x, ...) {
   cat("Pooled Mean Group Estimator (Newton-Raphson)\n")
+  if (!is.null(x$panel$lag_info)) {
+    li <- x$panel$lag_info
+    cat(sprintf("ARDL(%d,%s) selected by %s (max_lag=%d, %d candidates evaluated)\n",
+                li$plag, paste(li$qlag, collapse = ","),
+                toupper(li$criterion), li$max_lag, li$n_candidates))
+  }
   cat(sprintf("Converged: %s (%d iterations)\n", x$converged, x$iterations))
   cat(sprintf("Log-likelihood: %.4f\n\n", x$loglik))
   cat("Long-Run Coefficients:\n")
@@ -285,9 +322,11 @@ print.pmg_result <- function(x, ...) {
 
 #' Run MG from a data.frame
 mg_panel <- function(data, y, x, unit, time,
-                     z = NULL, plag = 1L, qlag = 1L, ref_group = NULL) {
+                     z = NULL, plag = 1L, qlag = 1L, ref_group = NULL,
+                     lag = NULL, max_lag = 2L) {
 
-  p   <- prepare_panel(data, y, x, unit, time, z, plag, qlag, ref_group)
+  p   <- prepare_panel(data, y, x, unit, time, z, plag, qlag, ref_group,
+                        lag = lag, max_lag = max_lag)
   res <- MG(p$Y, p$X, p$Z, p$n, p$Ti, p$k, p$plag, p$qlag, NN = p$NN)
 
   res$lr        <- label_theta(res$theta, res$theta_se, res$theta_t, p$x_names)
@@ -303,7 +342,14 @@ mg_panel <- function(data, y, x, unit, time,
 
 #' @export
 print.mg_result <- function(x, ...) {
-  cat("Mean Group Estimator\n\n")
+  cat("Mean Group Estimator\n")
+  if (!is.null(x$panel$lag_info)) {
+    li <- x$panel$lag_info
+    cat(sprintf("ARDL(%d,%s) selected by %s (max_lag=%d, %d candidates evaluated)\n",
+                li$plag, paste(li$qlag, collapse = ","),
+                toupper(li$criterion), li$max_lag, li$n_candidates))
+  }
+  cat("\n")
   cat("Long-Run Coefficients:\n")
   print(round(x$lr, 4))
   cat(sprintf("\nError Correction (phi): %.4f (se=%.4f)\n", x$phi, x$phi_se))
@@ -315,9 +361,11 @@ print.mg_result <- function(x, ...) {
 
 #' Run DFE from a data.frame
 dfe_panel <- function(data, y, x, unit, time,
-                      z = NULL, plag = 1L, qlag = 1L, ref_group = NULL) {
+                      z = NULL, plag = 1L, qlag = 1L, ref_group = NULL,
+                      lag = NULL, max_lag = 2L) {
 
-  p <- prepare_panel(data, y, x, unit, time, z, plag, qlag, ref_group)
+  p <- prepare_panel(data, y, x, unit, time, z, plag, qlag, ref_group,
+                      lag = lag, max_lag = max_lag)
 
   # Compute numot from first group
   ytemp   <- p$Y[1:p$Ti[1]]
@@ -391,6 +439,12 @@ dfe_panel <- function(data, y, x, unit, time,
 #' @export
 print.dfe_result <- function(x, ...) {
   cat("Dynamic Fixed Effects Estimator\n")
+  if (!is.null(x$panel$lag_info)) {
+    li <- x$panel$lag_info
+    cat(sprintf("ARDL(%d,%s) selected by %s (max_lag=%d, %d candidates evaluated)\n",
+                li$plag, paste(li$qlag, collapse = ","),
+                toupper(li$criterion), li$max_lag, li$n_candidates))
+  }
   cat(sprintf("Observations: %d\n\n", x$qobs))
 
   k  <- nrow(x$lr)

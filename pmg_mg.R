@@ -231,6 +231,177 @@ MG <- function(Y, X, Z, n, Ti, k, plag, qlag, NN = n) {
 
 
 # ==============================================================================
+# Automatic Lag Selection (Common ARDL)
+# ==============================================================================
+#'
+#' Selects a single ARDL(p, q1, ..., qk) specification applied uniformly to
+#' all groups, by maximising the sum of group-specific information criteria.
+#'
+#' For each candidate specification up to max_lag:
+#'   1. Run individual OLS per group (same regressions MG uses)
+#'   2. Compute AIC or SBC using ML sigma^2
+#'   3. Sum the IC across all groups
+#'   4. Pick the specification that maximises the total IC (higher = better)
+#'
+#' @param Y,X,Z,n,Ti,k  Panel data in stacked format (same as MG/PMG)
+#' @param max_lag   Maximum lag order to consider (default 2)
+#' @param criterion "sbc" (default) or "aic"
+#' @param NN        Number of groups to evaluate (default n)
+#' @param rel_var   If TRUE, last X column is a relative variable with q forced
+#'                  to 0 (excluded from lag selection)
+#' @param verbose   Print candidate evaluations (default FALSE)
+#'
+#' @return List with:
+#'   plag      - selected lag order for y (scalar)
+#'   qlag      - selected lag orders for X (vector of length k)
+#'   criterion - criterion used ("aic" or "sbc")
+#'   max_lag   - max_lag that was searched
+#'   best_ic   - value of the best total IC
+#'   n_candidates - number of candidates evaluated
+#'
+select_common_lags <- function(Y, X, Z, n, Ti, k, max_lag = 2L,
+                               criterion = "sbc", NN = n,
+                               rel_var = FALSE, verbose = FALSE) {
+
+  criterion <- tolower(criterion)
+  stopifnot(criterion %in% c("aic", "sbc"))
+  max_lag <- as.integer(max_lag)
+  stopifnot(max_lag >= 1L)
+
+
+  # --- Enumerate candidates ---
+  # p in 1:max_lag (p >= 1 required for ECM)
+  # q_j in 0:max_lag for each free regressor
+  # If rel_var, last regressor is fixed at q=0
+  k_free <- if (rel_var) k - 1L else k
+  p_vals <- seq_len(max_lag)
+  q_vals <- 0L:max_lag
+
+  # Build grid of q vectors for the free regressors
+  if (k_free == 0L) {
+    q_grid <- matrix(nrow = 1, ncol = 0)
+  } else {
+    q_grid <- as.matrix(expand.grid(rep(list(q_vals), k_free)))
+  }
+
+  best_ic   <- -Inf
+  best_p    <- NA_integer_
+  best_q    <- rep(NA_integer_, k)
+  n_eval    <- 0L
+
+  for (p_cand in p_vals) {
+    for (qi in seq_len(nrow(q_grid))) {
+      q_free <- as.integer(q_grid[qi, ])
+      q_cand <- if (rel_var) c(q_free, 0L) else q_free
+
+      # Build uniform plag/qlag for all n groups
+      plag_cand <- rep(p_cand, n)
+      qlag_cand <- matrix(rep(q_cand, each = n), nrow = n, ncol = k)
+
+      # Evaluate: sum IC across groups
+      total_ic  <- 0
+      feasible  <- TRUE
+
+      ini <- 1L
+      for (i in seq_len(NN)) {
+        Tis  <- Ti[i]
+        fini <- ini + Tis - 1L
+
+        ytemp <- Y[ini:fini]
+        xtemp <- as.matrix(X[ini:fini, , drop = FALSE])
+        ztemp <- as.matrix(Z[ini:fini, , drop = FALSE])
+
+        dgp <- DGP1(ytemp, xtemp, ztemp, plag_cand, qlag_cand, k, i, Tis)
+        dy <- dgp$dy;  y1 <- dgp$y1;  x0 <- dgp$x0;  ww <- dgp$ww
+
+        pp     <- plag_cand[i]
+        Ti_eff <- length(dy)
+
+        # Build regression
+        if (pp == 0L) {
+          reg <- cbind(x0, ww)
+          dep <- dgp$y0
+        } else {
+          reg <- cbind(y1, x0, ww)
+          dep <- dy
+        }
+
+        nreg <- ncol(reg)
+
+        # Check feasibility: need more obs than regressors
+        if (Ti_eff <= nreg) {
+          feasible <- FALSE
+          break
+        }
+
+        # OLS
+        SRb  <- tryCatch(
+          solve(crossprod(reg), crossprod(reg, dep)),
+          error = function(e) NULL
+        )
+        if (is.null(SRb)) {
+          feasible <- FALSE
+          break
+        }
+
+        res  <- dep - reg %*% SRb
+        sig2 <- as.numeric(crossprod(res) / Ti_eff)  # ML sigma^2
+
+        # Log-likelihood
+        LL <- -(Ti_eff / 2) * (1 + log(2 * pi * sig2))
+
+        # Information criterion (higher = better, matching GAUSS MSC)
+        if (criterion == "aic") {
+          ic <- LL - nreg
+        } else {
+          ic <- LL - (nreg / 2) * log(Ti_eff)
+        }
+
+        total_ic <- total_ic + ic
+        ini <- fini + 1L
+      }
+
+      if (!feasible) {
+        if (verbose) {
+          cat(sprintf("  ARDL(%d,%s): infeasible\n",
+                      p_cand, paste(q_cand, collapse = ",")))
+        }
+        next
+      }
+
+      n_eval <- n_eval + 1L
+
+      if (verbose) {
+        cat(sprintf("  ARDL(%d,%s): total %s = %.4f%s\n",
+                    p_cand, paste(q_cand, collapse = ","),
+                    toupper(criterion), total_ic,
+                    if (total_ic > best_ic) " *" else ""))
+      }
+
+      if (total_ic > best_ic) {
+        best_ic <- total_ic
+        best_p  <- p_cand
+        best_q  <- q_cand
+      }
+    }
+  }
+
+  if (is.na(best_p)) {
+    stop("No feasible ARDL specification found within max_lag=", max_lag)
+  }
+
+  list(
+    plag         = best_p,
+    qlag         = best_q,
+    criterion    = criterion,
+    max_lag      = max_lag,
+    best_ic      = best_ic,
+    n_candidates = n_eval
+  )
+}
+
+
+# ==============================================================================
 # PMG: Pooled Mean Group Estimator (Back-Substitution Algorithm)
 # ==============================================================================
 #'
