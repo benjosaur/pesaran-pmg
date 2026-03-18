@@ -188,6 +188,48 @@ label_phi <- function(phi_all, group_names) {
   phi_all
 }
 
+#' Build a labelled data.frame for MG/PMG short-run coefficients
+#'
+#' beta = coefficients on x levels in the ECM (k values)
+#' other = lagged Δy, current/lagged Δx, intercept (from ww)
+#'
+build_sr_table <- function(beta, beta_se, beta_t, other, other_se, other_t, p) {
+  pp <- p$plag[1]
+  k  <- p$k
+
+  # Beta labels
+  beta_names <- paste0("b.", p$x_names)
+
+  # Other SR labels: lagged Δy, then current/lagged Δx, then Z (intercept)
+  other_names <- character(0)
+  if (pp >= 2L) {
+    for (j in seq_len(pp - 1L))
+      other_names <- c(other_names, sprintf("d.%s(-%d)", p$y_name, j))
+  }
+  for (j in seq_len(k)) {
+    q_j <- p$qlag[1, j]
+    if (q_j >= 1L) {
+      other_names <- c(other_names, paste0("d.", p$x_names[j]))
+      if (q_j >= 2L) {
+        for (l in seq_len(q_j - 1L))
+          other_names <- c(other_names, sprintf("d.%s(-%d)", p$x_names[j], l))
+      }
+    }
+  }
+  # Intercept (always last in ww for MG/PMG)
+  n_remaining <- length(other) - length(other_names)
+  if (n_remaining > 0) {
+    other_names <- c(other_names, rep("intercept", n_remaining))
+  }
+
+  coefs <- c(beta, other)
+  ses   <- c(beta_se, other_se)
+  ts    <- c(beta_t, other_t)
+  nms   <- c(beta_names, other_names)
+
+  data.frame(coef = coefs, se = ses, t = ts, row.names = nms)
+}
+
 
 # ==============================================================================
 # Convenience wrappers: data.frame in, labelled results out
@@ -218,6 +260,9 @@ pmg_panel <- function(data, y, x, unit, time,
   # Attach labels
   res$lr        <- label_theta(res$theta, res$theta_se, res$theta_t, p$x_names)
   res$group_phi <- label_phi(res$phi_all, p$group_names[seq_len(p$NN)])
+  res$sr        <- build_sr_table(res$beta, res$beta_se, res$beta_t,
+                                  res$other, res$other_se, res$other_t,
+                                  p)
   res$panel     <- p
 
   class(res) <- "pmg_result"
@@ -232,7 +277,9 @@ print.pmg_result <- function(x, ...) {
   cat("Long-Run Coefficients:\n")
   print(round(x$lr, 4))
   cat(sprintf("\nError Correction (phi): %.4f (se=%.4f)\n", x$phi, x$phi_se))
-  cat(sprintf("Groups: %d\n", length(x$group_phi)))
+  cat("\nShort-Run Coefficients (cross-group averages):\n")
+  print(round(x$sr, 4))
+  cat(sprintf("\nGroups: %d\n", length(x$group_phi)))
 }
 
 
@@ -245,6 +292,9 @@ mg_panel <- function(data, y, x, unit, time,
 
   res$lr        <- label_theta(res$theta, res$theta_se, res$theta_t, p$x_names)
   res$group_phi <- label_phi(res$phi_all, p$group_names[seq_len(p$NN)])
+  res$sr        <- build_sr_table(res$beta, res$beta_se, res$beta_t,
+                                  res$other, res$other_se, res$other_t,
+                                  p)
   res$panel     <- p
 
   class(res) <- "mg_result"
@@ -257,7 +307,9 @@ print.mg_result <- function(x, ...) {
   cat("Long-Run Coefficients:\n")
   print(round(x$lr, 4))
   cat(sprintf("\nError Correction (phi): %.4f (se=%.4f)\n", x$phi, x$phi_se))
-  cat(sprintf("Groups: %d\n", length(x$group_phi)))
+  cat("\nShort-Run Coefficients (cross-group averages):\n")
+  print(round(x$sr, 4))
+  cat(sprintf("\nGroups: %d\n", length(x$group_phi)))
 }
 
 
