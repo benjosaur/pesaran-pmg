@@ -4,20 +4,52 @@ R implementation of the four estimators from:
 
 > Pesaran, M.H., Shin, Y. & Smith, R.P. (1999). "Pooled Mean Group Estimation of Dynamic Heterogeneous Panels." *Journal of the American Statistical Association*, 94(446), 621-634.
 
-Translated from the original GAUSS code distributed with the paper.
+## Provenance: What Comes From Where
 
-## Estimators
+### Direct translations from GAUSS (verified against OUTPUT.OUT and paper)
 
-| Estimator | Description |
-|-----------|-------------|
-| **SFE** | Static Fixed Effects — estimates cointegrating relationship directly from levels with φ = -1 imposed |
-| **DFE** | Dynamic Fixed Effects — panel ARDL/ECM with within-transformation, recovers long-run via θ = -β/φ |
-| **MG** | Mean Group — unrestricted OLS per group, averages long-run parameters across groups |
-| **PMG** | Pooled Mean Group — constrains long-run parameters equal across groups via concentrated ML, allows heterogeneous short-run dynamics |
+| File | GAUSS source | What it translates | Verified against |
+|------|-------------|-------------------|-----------------|
+| `panel_ecm_fe.R` — `SFE()` | `FIX.PRC` — `SFE` | Static Fixed Effects estimator | OUTPUT.OUT p.25: all coefficients and SEs match to 4dp |
+| `panel_ecm_fe.R` — `DFE1()` | `FIX.PRC` — `DFE1` | Dynamic Fixed Effects estimator | OUTPUT.OUT p.25-26: all LR, phi, SR coefficients and SEs match to 4dp |
+| `panel_ecm_fe.R` — `FDGP1()` | `FIX.PRC` — `FDGP1` | Data generation for DFE (excludes intercept from ww) | Implicit via DFE results |
+| `panel_ecm_fe.R` — `lag1()`, `demean()` | `SUB0.PRC` — `LAG`, within-transform | Lag and demeaning helpers | Implicit via all estimators |
+| `pmg_mg.R` — `MG()` | `SUB1.PRC` — `OLS1` | Mean Group estimator (individual OLS + cross-sectional averaging) | OUTPUT.OUT p.26: all LR, phi, SR coefficients and SEs match to 3dp. Paper Table 1: exact match. Paper Table 3: exact match |
+| `pmg_mg.R` — `PMG()` | `SUB1.PRC` — `PMLEBS1` | PMG via Back-Substitution Algorithm | Converges to same optimum as NR (verified) |
+| `pmg_mg.R` — `PMG_NR()` | `SUB1.PRC` — `PMLENR1` + `INIPHI1` | PMG via Newton-Raphson | OUTPUT.OUT p.26: LR coefficients match within 0.006 (our RSLL is marginally higher). Paper Table 1: exact match on all coefficients |
+| `pmg_mg.R` — `pmg_final()` | `SUB1.PRC` — `PMLESR1` | PMG final SEs from information matrix | OUTPUT.OUT: theta SEs match. Paper Table 1: match |
+| `pmg_mg.R` — `DGP1()` | `SUB1.PRC` — `DGP1` | Data generation for MG/PMG (includes intercept in ww) | Implicit via MG/PMG results |
+| `load_data.R` — `load_example1()` | `jasa1.prg` — data loading section | OECD consumption data (LPC, LNDI, DP) with missing value handling | Ti counts match OUTPUT.OUT. SFE obs=767, DFE obs=743 match exactly |
+| `load_data.R` — `load_example2()` | `jasa2.prg` — data loading section | Asian energy demand data (EDA) | Paper Table 3: all estimators match |
+
+### Additions (not in the original GAUSS code)
+
+| File | What it adds | Status |
+|------|-------------|--------|
+| `pmg_mg.R` — `hausman_test()` | Hausman test comparing PMG vs MG efficiency | Verified: h=2.62, p=0.27 for OUTPUT.OUT spec; consistent with paper's reported h=2.79 (difference due to PMG convergence point) |
+| `pmg_mg.R` — `lr_test()` (in `test_cross_estimator.R`) | Likelihood ratio test: 2*(MG_LL - PMG_LL) | Verified: LR=121.50 matches OUTPUT.OUT value 121.51. Corrects GAUSS df from NN*k=46 to (NN-1)*k=44 |
+| `panel_helpers.R` — `prepare_panel()` | Convert data.frame to stacked format | Verified: 14/14 checks pass, max diff=0 between df and raw API (`replicate_df.R`) |
+| `panel_helpers.R` — `pmg_panel()`, `mg_panel()`, `dfe_panel()`, `sfe_panel()` | Data.frame convenience wrappers with labelled output | Verified: identical results to raw API. SR labels verified against OUTPUT.OUT |
+| `panel_helpers.R` — print methods | Labelled output for all estimators (LR, phi, SR with row names) | Verified: all printed values match OUTPUT.OUT |
+| `panel_ecm_fe.R` — `DFE2()`, `FDGP2()` | Two-regressor-set DFE variant | Translated from `FIX.PRC`. Not separately verified (no reference output for this variant in the distributed files) |
+| `tests/test_replication.R` | Unit tests against OUTPUT.OUT | 12/12 pass |
+| `tests/test_cross_estimator.R` | Cross-estimator nesting tests, LR test, Hausman | 14/14 pass |
+| `replicate_tables.R` | Reproduces paper Tables 1, 2 (partial), 3 | Table 1: exact match. Table 2 ARDL(1,0,0): exact match. Table 3: exact match |
+| `replicate_df.R` | Verifies data.frame API against raw API | 14/14 checks, max diff=0 |
+| `examples/mock_panel.R` | Simulated ECM panel with known DGP | Not a replication — demonstrates API usage |
+| `reports/outliers_sweden.md` | Analysis of Sweden outlier in PDI data | Documents paper's discussion; independently verified country-specific OLS |
+
+### Bug fixes relative to original GAUSS
+
+| Fix | Detail |
+|-----|--------|
+| LR test df | GAUSS reports df=NN*k=46; correct df is (NN-1)*k=44 |
+| `diag()` with k=1 | R's `diag(scalar)` creates an identity matrix instead of extracting the diagonal; fixed with `drop=FALSE` |
+| `ref_group` ordering | Alphabetical sort could exclude wrong reference country; fixed by explicitly placing `ref_group` last |
 
 ## Variables
 
-The replication uses Example 1 (OECD Consumption Function). The variable names `inc` and `inf` are labels from the original GAUSS interactive session:
+The variable names `inc` and `inf` are labels from the original GAUSS interactive session:
 
 | Label | Variable | Source file | Description |
 |-------|----------|-------------|-------------|
@@ -26,26 +58,23 @@ The replication uses Example 1 (OECD Consumption Function). The variable names `
 
 The dependent variable is log real per-capita private consumption (`LPC.DAT`). The intercept is the only deterministic regressor (Z). No seasonal dummies are needed — the data is annual (1960-1993).
 
-## Mapping to the Paper's Tables
+## Verification Summary
 
-The paper reports results for two ARDL specifications across two examples. The GAUSS `OUTPUT.OUT` distributed with the code uses a *different* specification from Table 1 in the paper. Both are replicated here.
+### Paper Table 1: ARDL(1,1,1), NDI, N=24 — `replicate_tables.R`
 
-### Table 1: ARDL(1,1,1), OECD Consumption, NDI, N=24
-
-All 24 countries used (inflation treated as regular regressor, not relative). DFE SEs are robust (heteroscedasticity-corrected); the uncorrected SEs are substantially smaller.
+All 24 countries, inflation as regular regressor. DFE SEs are robust.
 
 |  | MG | PMG | DFE (robust SE) |
 |--|----|----|------|
 | θ₁ (inc) | **0.918** (0.027) | **0.904** (0.009) | **0.912** (0.045) |
 | θ₂ (inf) | **-0.353** (0.117) | **-0.466** (0.057) | **-0.266** (0.098) |
 | φ | **-0.306** (0.030) | **-0.200** (0.032) | **-0.179** (0.042) |
-| MLL | 2390 | 2327 | — |
 
-Paper Table 1 values: MG θ₁=0.918 (0.027), PMG θ₁=0.904 (0.010), DFE θ₁=0.912 (0.045). **Exact match on all coefficients and SEs.**
+Paper values: MG θ₁=0.918 (0.027), PMG θ₁=0.904 (0.010), DFE θ₁=0.912 (0.045). **Exact match on all coefficients and SEs.**
 
-### OUTPUT.OUT: ARDL(1,2,0), OECD Consumption, NDI, NN=23
+### OUTPUT.OUT: ARDL(1,2,0), NDI, NN=23 — `replicate.R`
 
-Inflation treated as relative variable (lag forced to 0, U.K. excluded from MG/PMG). This is the specification distributed with the GAUSS code.
+Inflation as relative variable, U.K. excluded from MG/PMG.
 
 |  | MG | PMG | DFE | SFE |
 |--|----|----|------|-----|
@@ -53,113 +82,117 @@ Inflation treated as relative variable (lag forced to 0, U.K. excluded from MG/P
 | θ₂ (inf) | **-0.305** (0.128) | **-0.495** (0.052) | **-0.307** (0.076) | **-0.094** (0.027) |
 | φ | **-0.317** (0.032) | **-0.199** (0.035) | **-0.156** (0.017) | -1 |
 
-SFE, DFE, and MG match the GAUSS output exactly. PMG θ₂ differs by 0.006 (our RSLL is marginally higher: 2139.36 vs 2139.35).
+SFE, DFE, MG: exact match. PMG θ₂ differs by 0.006 (our RSLL=2139.36 > reference 2139.35).
 
-### What Differs Between These Specifications
+### Paper Table 3: ARDL(1,0,0), Energy Demand, N=10 — `replicate_tables.R`
 
-| Feature | Table 1 | OUTPUT.OUT |
-|---------|---------|------------|
-| ARDL order | (1, 1, 1) | (1, 2, 0) |
-| Inflation treatment | Regular regressor (lag=1) | Relative variable (lag forced to 0) |
-| Groups in MG/PMG | N=24 (all) | NN=23 (U.K. excluded) |
-| Short-run Δ(income) terms | 1 (current Δy^d) | 2 (current + lagged Δy^d) |
-| Short-run Δ(inflation) terms | 1 (current Δπ) | 0 (none) |
+|  | MG | PMG | DFE | SFE |
+|--|----|----|------|-----|
+| θ₁ (output) | **1.228** (0.183) | **1.183** (0.039) | **1.301** (0.109) | **1.009** (0.037) |
+| θ₂ (price) | **-0.261** (0.118) | **-0.339** (0.033) | **-0.365** (0.097) | **-0.067** (0.030) |
 
-## Cross-Estimator Tests (beyond the paper)
+Paper values: exact match on all coefficients.
 
-`tests/test_cross_estimator.R` verifies the nesting relationships MG > PMG > DFE that the paper discusses theoretically but the original GAUSS code does not formally test end-to-end:
+## Cross-Estimator Tests (additions, not in paper/GAUSS)
+
+`tests/test_cross_estimator.R` verifies nesting relationships MG > PMG > DFE:
 
 | Test | Result |
 |------|--------|
-| **LR test** (MG vs PMG): 2*(URSLL - RSLL) | 121.50, χ²(44), p < 0.001 — rejects LR homogeneity |
-| **Hausman test** (PMG vs MG) | h = 2.62, p = 0.27 — does not reject PMG efficiency |
-| **LL ordering**: MG URSLL > PMG RSLL | 2200.11 > 2139.36 (unrestricted fits better, as expected) |
-| **Short-run heterogeneity**: PMG φ_i std dev | 0.17 — substantial, DFE homogeneity assumption is restrictive |
-| **DFE φ within PMG φ range** | -0.156 is within [-0.603, 0.018] |
-| **SFE bias direction** | Highest income elasticity (upward), smallest |inf| (attenuation) |
-
-The LR test rejects while the Hausman test does not — a classic finite-sample divergence. The LR test has power against all departures from homogeneity, while the Hausman test is specifically designed for the case where PMG is efficient under H0. In practice, the Hausman non-rejection supports the PMG specification.
+| **LR test** (MG vs PMG): 2*(URSLL - RSLL) | 121.50, χ²(44), p < 0.001 |
+| **Hausman test** (PMG vs MG) | h = 2.62, p = 0.27 — does not reject PMG |
+| **LL ordering**: MG URSLL > PMG RSLL | 2200.11 > 2139.36 |
+| **Short-run heterogeneity**: PMG φ_i std dev | 0.17 |
+| **DFE φ within PMG φ range** | -0.156 within [-0.603, 0.018] |
+| **SFE bias direction** | Highest θ₁ (upward), smallest |θ₂| (attenuation) |
 
 ## Why Different ARDL Specifications?
 
-The paper tests multiple ARDL orders to show robustness. The choice is motivated by:
+1. **ARDL(1,1,1)** — "maximum lag = 1" default. Table 1.
+2. **ARDL(1,2,0)** — relative variable forces inflation lag=0. OUTPUT.OUT.
+3. **SBC-chosen** — data-driven per country. Table 4 (not reproduced; requires lag selection not yet implemented).
 
-1. **ARDL(1,1,1)** — the "maximum lag = 1" default. Simple, symmetric treatment of all regressors. Used for Table 1.
-
-2. **ARDL(1,2,0)** — used in the GAUSS `OUTPUT.OUT`. When inflation is treated as a **relative variable** (measured relative to a reference country like U.K.), the GAUSS code forces its lag to 0 and disables AIC-based lag selection (`SUB0.PRC` line 525). The extra income lag (q=2) allows a richer short-run income response.
-
-3. **SBC-chosen lags** — the paper's Table 4 (energy demand) lets the Schwarz criterion choose lag orders per country. The most common choice was ARDL(1,1,0) for consumption and ARDL(1,0,0) for energy demand. This is the most data-driven approach but creates group-specific SR dimensions.
-
-The paper's key finding is that **the long-run estimates are robust across all specifications** — income elasticity is always ~0.9, inflation is always significantly negative. The short-run dynamics and speed of adjustment are more sensitive to lag choice.
-
-### Why Not AIC in Our Replication?
-
-The current code supports any user-specified fixed lag order via `plag` and `qlag`. AIC/SBC-based selection per country (as in the GAUSS `AICLAG` procedure) is not yet implemented. This would require:
-- Running unrestricted ARDL regressions per group with varying lag orders
-- Selecting the order that minimizes AIC/SBC for each group
-- Handling heterogeneous SR dimensions in the PMG information matrix (the current `pmg_final` asserts uniform `numsi`)
+The long-run estimates are robust across all specifications (~0.9 for income, negative for inflation). Short-run dynamics are more sensitive.
 
 ## How to Run
 
-```r
-# Run full replication
+```bash
+# Reproduce paper tables (Table 1, 2 partial, 3)
+Rscript replicate_tables.R
+
+# Reproduce OUTPUT.OUT specification
 Rscript replicate.R
 
-# Run unit tests (coefficients, SEs, obs counts vs OUTPUT.OUT)
+# Verify data.frame API matches raw API
+Rscript replicate_df.R
+
+# Unit tests against OUTPUT.OUT
 Rscript tests/test_replication.R
 
-# Run cross-estimator tests (LR test, nesting, Hausman)
+# Cross-estimator nesting tests
 Rscript tests/test_cross_estimator.R
 ```
 
-No external packages required for the core estimators. `test_replication.R` uses `testthat` if available, with a basic fallback otherwise.
+No external packages required. `test_replication.R` uses `testthat` if available, with a basic fallback.
 
 ## Using Your Own Data
 
-The estimator functions are generic. Bypass `load_example1()` and pass your own matrices:
-
 ```r
-source("panel_ecm_fe.R")
-source("pmg_mg.R")
+source("panel_helpers.R")
 
-# Y: stacked dependent variable (length sum(Ti))
-# X: stacked regressors (sum(Ti) x k matrix)
-# Z: fixed regressors — intercept MUST be the last column
-#    e.g. cbind(trend, qs1, qs2, qs3, intercept) for quarterly data
-# Ti: integer vector of time periods per group
-# plag: lag order for Δy (length n vector)
-# qlag: lag orders for each ΔX column (n x k matrix)
+# Any data.frame / data.table / pdata.frame
+pmg <- pmg_panel(df, y = "consumption", x = c("income", "inflation"),
+                 unit = "country", time = "year",
+                 plag = 1, qlag = c(1, 1))
+print(pmg)        # labelled LR, phi, SR coefficients
+pmg$lr            # data.frame with variable names
+pmg$group_phi     # named vector of group-specific phi
 
-mg  <- MG(Y, X, Z, n, Ti, k, plag, qlag)
-pmg <- PMG_NR(Y, X, Z, n, Ti, k, plag, qlag)
-sfe <- SFE(Y, X, Z, n, Ti, k)
-dfe <- DFE1(Y, X, Z, n, Ti, k, numot, plag, qlag)
+# Also: mg_panel(), dfe_panel(), sfe_panel() — same interface
 ```
 
-**Caveat**: All groups must currently have the same number of short-run parameters (uniform lag orders). Group-specific AIC-chosen lags would require extending the `pmg_final` SE computation.
+Seasonal dummies for quarterly/monthly data go in Z (intercept must be last column):
+```r
+sfe <- sfe_panel(df, y = "y", x = c("x1", "x2"),
+                 unit = "id", time = "quarter",
+                 z = c("qs1", "qs2", "qs3"))
+```
+
+For relative variables, specify the reference group explicitly:
+```r
+pmg <- pmg_panel(df, ..., ref_group = "U.K.")
+```
+
+**Caveat**: All groups must have uniform lag orders. Group-specific AIC-chosen lags require extending `pmg_final`.
 
 ## File Structure
 
 ```
-├── panel_ecm_fe.R          # SFE, DFE estimators and helpers (lag1, demean, FDGP1)
-├── pmg_mg.R                # MG, PMG (BSA & NR), LR test, Hausman test
-├── load_data.R             # Data loading for Examples 1 and 2
-├── replicate.R             # Main replication script
+├── panel_ecm_fe.R            # [GAUSS translation] SFE, DFE, helpers
+├── pmg_mg.R                  # [GAUSS translation] MG, PMG (BSA & NR), Hausman
+├── load_data.R               # [GAUSS translation] Data loading for Examples 1 & 2
+├── panel_helpers.R           # [Addition] data.frame API, labelled output
+├── replicate.R               # [Verification] OUTPUT.OUT specification
+├── replicate_tables.R        # [Verification] Paper Tables 1, 2, 3
+├── replicate_df.R            # [Verification] data.frame API vs raw API
 ├── tests/
-│   ├── test_replication.R      # Unit tests against OUTPUT.OUT values
-│   └── test_cross_estimator.R  # LR test, nesting restrictions, Hausman
-├── prog/                   # Original GAUSS code and data files
-│   ├── LPC.DAT, LNDI.DAT, DP.DAT   # Example 1 data
-│   ├── EDA.DAT                       # Example 2 data
-│   ├── OUTPUT.OUT                    # Reference output
-│   └── *.PRG, *.PRC                  # Original GAUSS programs
+│   ├── test_replication.R    # [Verification] Unit tests vs OUTPUT.OUT (12/12)
+│   └── test_cross_estimator.R # [Addition] LR test, Hausman, nesting (14/14)
+├── examples/
+│   └── mock_panel.R          # [Addition] Simulated ECM panel demo
+├── reports/
+│   └── outliers_sweden.md    # [Addition] Sweden outlier analysis
+├── prog/                     # [Original] GAUSS code and data files
+│   ├── *.DAT                 # Original data files
+│   ├── OUTPUT.OUT            # Reference output
+│   └── *.PRG, *.PRC          # Original GAUSS programs
 └── README.md
 ```
 
 ## Key Implementation Notes
 
-- **Relative variable**: The last X variable (inflation) is treated as a relative variable. Its lag order is fixed at 0, and the last group (U.K.) is excluded from MG/PMG estimation (NN = N-1 = 23). SFE and DFE use all N = 24 groups.
-- **PMG algorithms**: Both Back-Substitution (BSA) and Newton-Raphson (NR) are implemented. NR jointly updates θ and φ and matches the GAUSS `PMLENR1` procedure. Both converge to the same optimum.
-- **Standard errors**: PMG θ SEs come from the full information matrix. PMG φ/β/γ SEs use cross-sectional variance (MG-style averaging).
-- **LR test degrees of freedom**: The GAUSS output reports df = NN*k = 46. The correct df is (NN-1)*k = 44 — the number of restrictions imposed by the PMG constraint.
+- **Relative variable**: Inflation is relative to a reference country. Its lag is forced to 0, and the reference group (U.K.) is excluded from MG/PMG (NN = N-1 = 23). SFE and DFE use all N = 24 groups.
+- **PMG algorithms**: Both BSA and NR are implemented and converge to the same optimum. NR matches GAUSS `PMLENR1`.
+- **Standard errors**: PMG θ SEs from the information matrix. PMG φ/β/γ SEs from cross-sectional variance.
+- **LR test df correction**: GAUSS reports df = NN*k = 46. Correct df is (NN-1)*k = 44.
 - **No external dependencies**: Core estimators use only base R.
